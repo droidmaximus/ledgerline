@@ -356,10 +356,13 @@ func HandleWebSocket(cfg *config.Config, logger zerolog.Logger) func(*websocket.
 			}
 
 			if req.DocID == "" || req.Question == "" {
-				ws.WriteJSON(fiber.Map{
+				if err := ws.WriteJSON(fiber.Map{
 					"type":  "error",
 					"error": "doc_id and question are required",
-				})
+				}); err != nil {
+					logger.Error().Err(err).Msg("Failed to write WebSocket validation error")
+					return
+				}
 				continue
 			}
 
@@ -459,12 +462,21 @@ func processQuery(queryID string, req QueryRequest, cfg *config.Config, logger z
 func streamQuery(req QueryRequest, cfg *config.Config, logger zerolog.Logger, ws *websocket.Conn) {
 	startTime := time.Now()
 	streamQueryID := uuid.New().String()
+	send := func(payload fiber.Map) bool {
+		if err := ws.WriteJSON(payload); err != nil {
+			logger.Error().Err(err).Msg("Failed to write WebSocket message")
+			return false
+		}
+		return true
+	}
 
 	// Send status update
-	ws.WriteJSON(fiber.Map{
+	if !send(fiber.Map{
 		"type":    "status",
 		"message": "Fetching document tree...",
-	})
+	}) {
+		return
+	}
 
 	// Get tree
 	treeStart := time.Now()
@@ -472,21 +484,27 @@ func streamQuery(req QueryRequest, cfg *config.Config, logger zerolog.Logger, ws
 	tree, err := cacheClient.GetTree(context.Background(), req.DocID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to get tree")
-		ws.WriteJSON(fiber.Map{
+		if !send(fiber.Map{
 			"type":  "error",
 			"error": "Failed to retrieve document",
-		})
-		ws.WriteJSON(fiber.Map{
+		}) {
+			return
+		}
+		if !send(fiber.Map{
 			"type": "done",
-		})
+		}) {
+			return
+		}
 		return
 	}
 	logger.Info().Int64("tree_fetch_ms", time.Since(treeStart).Milliseconds()).Msg("Tree fetched (streaming)")
 
-	ws.WriteJSON(fiber.Map{
+	if !send(fiber.Map{
 		"type":    "status",
 		"message": "Searching document structure...",
-	})
+	}) {
+		return
+	}
 
 	// Find relevant nodes
 	searchStart := time.Now()
@@ -494,21 +512,27 @@ func streamQuery(req QueryRequest, cfg *config.Config, logger zerolog.Logger, ws
 	nodeIDs, err := claudeClient.FindRelevantNodes(context.Background(), tree, req.Question)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to find relevant nodes")
-		ws.WriteJSON(fiber.Map{
+		if !send(fiber.Map{
 			"type":  "error",
 			"error": "Failed to search document",
-		})
-		ws.WriteJSON(fiber.Map{
+		}) {
+			return
+		}
+		if !send(fiber.Map{
 			"type": "done",
-		})
+		}) {
+			return
+		}
 		return
 	}
 	logger.Info().Int64("search_ms", time.Since(searchStart).Milliseconds()).Int("nodes_found", len(nodeIDs)).Msg("Search completed (streaming)")
 
-	ws.WriteJSON(fiber.Map{
+	if !send(fiber.Map{
 		"type":        "progress",
 		"nodes_found": len(nodeIDs),
-	})
+	}) {
+		return
+	}
 
 	// Extract context and generate answer
 	contextStart := time.Now()
@@ -521,37 +545,47 @@ func streamQuery(req QueryRequest, cfg *config.Config, logger zerolog.Logger, ws
 		Int64("context_extract_ms", time.Since(contextStart).Milliseconds()).
 		Msg("query context extraction complete (streaming)")
 
-	ws.WriteJSON(fiber.Map{
+	if !send(fiber.Map{
 		"type":    "status",
 		"message": "Generating answer...",
-	})
+	}) {
+		return
+	}
 
 	answerStart := time.Now()
 	answer, err := claudeClient.GenerateAnswer(context.Background(), req.Question, contextStr)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to generate answer")
-		ws.WriteJSON(fiber.Map{
+		if !send(fiber.Map{
 			"type":  "error",
 			"error": "Failed to generate answer",
-		})
-		ws.WriteJSON(fiber.Map{
+		}) {
+			return
+		}
+		if !send(fiber.Map{
 			"type": "done",
-		})
+		}) {
+			return
+		}
 		return
 	}
 	logger.Info().Int64("answer_gen_ms", time.Since(answerStart).Milliseconds()).Int64("total_ms", time.Since(startTime).Milliseconds()).Msg("Answer generated (streaming)")
 
 	// Send complete response
-	ws.WriteJSON(fiber.Map{
+	if !send(fiber.Map{
 		"type":       "answer",
 		"content":    answer,
 		"references": nodeIDs,
-	})
+	}) {
+		return
+	}
 
 	// Send done message - client will close connection
-	ws.WriteJSON(fiber.Map{
+	if !send(fiber.Map{
 		"type": "done",
-	})
+	}) {
+		return
+	}
 
 	publishQueryCompleted(cfg, logger, messaging.QueryCompletedMessage{
 		QueryID:   streamQueryID,
