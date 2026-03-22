@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: pageindex
+
+bases:
+  - ../base
+
+namePrefix: prod-
+
+commonLabels:
+  environment: production
+
+commonAnnotations:
+  description: "Production environment"
+
+replicas:
+  - name: ingestion-service
+    count: 3
+  - name: parser-service
+    count: 2
+  - name: cache-service
+    count: 2
+  - name: api-gateway
+    count: 3
+
+images:
+  - name: ingestion-service
+    newTag: v1.0.0
+  - name: parser-service
+    newTag: v1.0.0
+  - name: cache-service
+    newTag: v1.0.0
+  - name: api-gateway
+    newTag: v1.0.0
+
+resources:
+  - hpa.yaml
+  - ingress.yaml

@@ -1,0 +1,545 @@
+openapi: 3.0.3
+info:
+  title: Ledgerline API
+  version: 1.0.0
+  description: >-
+    API for document ingestion, retrieval, and agentic querying in the Ledgerline
+    PageIndex pipeline.
+servers:
+  - url: http://localhost:8083
+    description: Development (API Gateway)
+  - url: https://api.yourdomain.com
+    description: Production
+
+tags:
+  - name: Health
+  - name: Documents
+  - name: Query
+  - name: CacheInternal
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Service health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: api-gateway
+                required: [status, service]
+
+  /documents/upload:
+    post:
+      tags: [Documents]
+      summary: Upload a PDF document
+      description: >-
+        This endpoint is served by the ingestion service during local development.
+      operationId: uploadDocument
+      servers:
+        - url: http://localhost:8080
+          description: Development (Ingestion Service)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Document uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /documents:
+    get:
+      tags: [Documents]
+      summary: List processed documents
+      operationId: listDocuments
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Documents list
+          headers:
+            X-Total-Count:
+              schema:
+                type: integer
+              description: Total number of documents
+            X-Page-Count:
+              schema:
+                type: integer
+              description: Total pages for current pagination strategy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentsListResponse'
+
+  /documents/{doc_id}:
+    get:
+      tags: [Documents]
+      summary: Get document metadata
+      operationId: getDocumentById
+      parameters:
+        - $ref: '#/components/parameters/DocId'
+      responses:
+        '200':
+          description: Document metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '404':
+          $ref: '#/components/responses/DocumentNotFound'
+
+  /documents/{doc_id}/tree:
+    get:
+      tags: [Documents]
+      summary: Get document tree structure
+      operationId: getDocumentTree
+      parameters:
+        - $ref: '#/components/parameters/DocId'
+      responses:
+        '200':
+          description: Tree retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentTreeResponse'
+        '404':
+          $ref: '#/components/responses/DocumentNotFound'
+
+  /query:
+    post:
+      tags: [Query]
+      summary: Submit a query for processing
+      operationId: createQuery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '202':
+          description: Query accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryAcceptedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/DocumentNotFound'
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /query/{query_id}:
+    get:
+      tags: [Query]
+      summary: Get query status or completed result
+      operationId: getQueryById
+      parameters:
+        - $ref: '#/components/parameters/QueryId'
+      responses:
+        '200':
+          description: Query completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryCompletedResponse'
+        '202':
+          description: Query still processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryInProgressResponse'
+        '404':
+          $ref: '#/components/responses/QueryNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /ws:
+    get:
+      tags: [Query]
+      summary: WebSocket endpoint for streaming query responses
+      operationId: websocketQueryStream
+      description: >-
+        Upgrade this HTTP endpoint to WebSocket and exchange JSON messages for
+        acknowledgment, status updates, reasoning, answer, completion, and error
+        events.
+      responses:
+        '101':
+          description: Switching Protocols (WebSocket upgrade successful)
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /cache/tree/{doc_id}:
+    get:
+      tags: [CacheInternal]
+      summary: Get cached tree from cache service
+      operationId: getCachedTree
+      servers:
+        - url: http://localhost:8082
+          description: Development (Cache Service)
+      parameters:
+        - $ref: '#/components/parameters/DocId'
+      responses:
+        '200':
+          description: Cached tree found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tree:
+                    $ref: '#/components/schemas/TreeNode'
+                required: [tree]
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Not found
+                required: [error]
+
+  /cache/stats:
+    get:
+      tags: [CacheInternal]
+      summary: Get cache statistics
+      operationId: getCacheStats
+      servers:
+        - url: http://localhost:8082
+          description: Development (Cache Service)
+      responses:
+        '200':
+          description: Cache statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStatsResponse'
+
+components:
+  parameters:
+    DocId:
+      name: doc_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Document UUID
+    QueryId:
+      name: query_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Query UUID
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Sort:
+      name: sort
+      in: query
+      required: false
+      schema:
+        type: string
+        default: -created_at
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        status:
+          type: string
+          example: error
+        code:
+          type: string
+      required: [error, status, code]
+
+    UploadResponse:
+      type: object
+      properties:
+        doc_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: uploaded
+        message:
+          type: string
+          example: Document uploaded successfully
+      required: [doc_id, status, message]
+
+    Document:
+      type: object
+      properties:
+        doc_id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        uploaded_at:
+          type: string
+          format: date-time
+        pages:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          example: completed
+        tree_generated_at:
+          type: string
+          format: date-time
+      required: [doc_id, filename, uploaded_at, pages, status]
+
+    DocumentsListResponse:
+      type: object
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/Document'
+        count:
+          type: integer
+      required: [documents, count]
+
+    TreeNode:
+      type: object
+      properties:
+        title:
+          type: string
+        node_id:
+          type: string
+        start_index:
+          type: integer
+        end_index:
+          type: integer
+        summary:
+          type: string
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/TreeNode'
+
+    DocumentTreeResponse:
+      type: object
+      properties:
+        doc_id:
+          type: string
+          format: uuid
+        tree:
+          $ref: '#/components/schemas/TreeNode'
+      required: [doc_id, tree]
+
+    QueryRequest:
+      type: object
+      properties:
+        doc_id:
+          type: string
+          format: uuid
+        question:
+          type: string
+        include_sources:
+          type: boolean
+          default: true
+      required: [doc_id, question]
+
+    Source:
+      type: object
+      properties:
+        node_id:
+          type: string
+        title:
+          type: string
+        pages:
+          type: string
+        relevance_score:
+          type: number
+          format: float
+      required: [node_id, title, pages]
+
+    QueryAcceptedResponse:
+      type: object
+      properties:
+        query_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: processing
+        estimated_time_seconds:
+          type: integer
+      required: [query_id, status]
+
+    QueryInProgressResponse:
+      type: object
+      properties:
+        query_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: processing
+        progress:
+          type: string
+        estimated_time_remaining_seconds:
+          type: integer
+      required: [query_id, status]
+
+    QueryCompletedResponse:
+      type: object
+      properties:
+        query_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: completed
+        answer:
+          type: string
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/Source'
+        processing_time_ms:
+          type: integer
+        confidence:
+          type: number
+          format: float
+      required: [query_id, status, answer]
+
+    CacheStatsResponse:
+      type: object
+      properties:
+        hits:
+          type: integer
+        misses:
+          type: integer
+        cached_items:
+          type: integer
+        hit_rate:
+          type: number
+          format: float
+      required: [hits, misses, cached_items, hit_rate]
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Missing required field
+            status: error
+            code: INVALID_REQUEST
+    PayloadTooLarge:
+      description: Uploaded file exceeds size limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Uploaded file exceeds size limit
+            status: error
+            code: FILE_TOO_LARGE
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Unexpected server error
+            status: error
+            code: INTERNAL_ERROR
+    DocumentNotFound:
+      description: Document not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Document not found
+            status: error
+            code: DOCUMENT_NOT_FOUND
+    QueryNotFound:
+      description: Query not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Query not found or expired
+            status: error
+            code: QUERY_NOT_FOUND
+    RateLimitExceeded:
+      description: Too many requests
+      headers:
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Too many requests from this IP
+            status: error
+            code: RATE_LIMIT_EXCEEDED

@@ -1,0 +1,70 @@
+---
+# Ingestion Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingestion-service
+  namespace: pageindex
+  labels:
+    app: ingestion-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingestion-service
+  template:
+    metadata:
+      labels:
+        app: ingestion-service
+    spec:
+      containers:
+      - name: ingestion-service
+        image: ingestion-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: INGESTION_SERVICE_PORT
+          value: "8080"
+        - name: KAFKA_BROKERS
+          value: "kafka:9092"
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: S3_BUCKET_DOCUMENTS
+          value: "pageindex-documents-dev"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+
+---
+# Ingestion Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingestion-service
+  namespace: pageindex
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app: ingestion-service

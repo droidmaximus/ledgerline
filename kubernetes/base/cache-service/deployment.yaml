@@ -1,0 +1,76 @@
+---
+# Cache Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cache-service
+  namespace: pageindex
+  labels:
+    app: cache-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cache-service
+  template:
+    metadata:
+      labels:
+        app: cache-service
+    spec:
+      containers:
+      - name: cache-service
+        image: cache-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8082
+          name: http
+        env:
+        - name: CACHE_SERVICE_PORT
+          value: "8082"
+        - name: REDIS_HOST
+          value: "redis"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_TTL
+          value: "3600"
+        - name: KAFKA_BROKERS
+          value: "kafka:9092"
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: S3_BUCKET_TREES
+          value: "pageindex-trees-dev"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "300m"
+          requests:
+            memory: "256Mi"
+            cpu: "150m"
+
+---
+# Cache Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache-service
+  namespace: pageindex
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8082
+    targetPort: 8082
+    protocol: TCP
+  selector:
+    app: cache-service

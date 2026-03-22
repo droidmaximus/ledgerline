@@ -1,0 +1,200 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # Zookeeper (Required for Kafka)
+  # ==========================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: ledgerline-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - ledgerline-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # Kafka
+  # ==========================================
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: ledgerline-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - ledgerline-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # ==========================================
+  # Kafka Init (Create Topics)
+  # ==========================================
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: ledgerline-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      echo 'Creating Kafka topics...'
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic documents.ingested --replication-factor 1 --partitions 3
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic documents.parsed --replication-factor 1 --partitions 3
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic queries.completed --replication-factor 1 --partitions 3
+      echo 'Kafka topics created successfully!'
+      kafka-topics --bootstrap-server kafka:29092 --list
+      "
+    networks:
+      - ledgerline-network
+
+  # ==========================================
+  # Kafka UI (Optional - for debugging)
+  # ==========================================
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: ledgerline-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - ledgerline-network
+
+  # ==========================================
+  # Redis
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: ledgerline-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - ledgerline-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # MinIO (S3-compatible storage)
+  # ==========================================
+  minio:
+    image: minio/minio:latest
+    container_name: ledgerline-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - ledgerline-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # MinIO Init (Create buckets)
+  # ==========================================
+  minio-init:
+    image: minio/mc:latest
+    container_name: ledgerline-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      echo 'Configuring MinIO client...'
+      mc alias set local http://minio:9000 minioadmin minioadmin
+      echo 'Creating buckets...'
+      mc mb local/pageindex-documents-dev --ignore-existing
+      mc mb local/pageindex-trees-dev --ignore-existing
+      echo 'Setting bucket policies...'
+      mc anonymous set download local/pageindex-documents-dev
+      mc anonymous set download local/pageindex-trees-dev
+      echo 'MinIO buckets created successfully!'
+      mc ls local/
+      "
+    networks:
+      - ledgerline-network
+
+  # ==========================================
+  # PostgreSQL (Phase 6 - Evaluation Service)
+  # ==========================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: ledgerline-postgres
+    # DB user/password/db names kept for compatibility with existing Docker volumes (historical "pageindex" naming).
+    # Host 5433 avoids clashing with a local PostgreSQL install on 5432 (Windows/macOS).
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: pageindex
+      POSTGRES_PASSWORD: pageindex_password
+      POSTGRES_DB: pageindex_eval
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - ledgerline-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pageindex"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# ==========================================
+# Networks
+# ==========================================
+networks:
+  ledgerline-network:
+    name: ledgerline-network
+    driver: bridge
+
+# ==========================================
+# Volumes
+# ==========================================
+volumes:
+  redis-data:
+    driver: local
+  minio-data:
+    driver: local
+  postgres-data:
+    driver: local

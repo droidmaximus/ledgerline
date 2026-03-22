@@ -1,0 +1,77 @@
+---
+# Parser Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: parser-service
+  namespace: pageindex
+  labels:
+    app: parser-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: parser-service
+  template:
+    metadata:
+      labels:
+        app: parser-service
+    spec:
+      containers:
+      - name: parser-service
+        image: parser-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8081
+          name: http
+        env:
+        - name: PARSER_SERVICE_PORT
+          value: "8081"
+        - name: KAFKA_BROKERS
+          value: "kafka:9092"
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: S3_BUCKET_DOCUMENTS
+          value: "pageindex-documents-dev"
+        - name: S3_BUCKET_TREES
+          value: "pageindex-trees-dev"
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-api-key
+              key: OPENAI_API_KEY
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+
+---
+# Parser Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: parser-service
+  namespace: pageindex
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8081
+    targetPort: 8081
+    protocol: TCP
+  selector:
+    app: parser-service

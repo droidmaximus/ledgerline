@@ -1,0 +1,73 @@
+---
+# API Gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: pageindex
+  labels:
+    app: api-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: api-gateway
+        image: api-gateway:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8083
+          name: http
+        env:
+        - name: API_GATEWAY_PORT
+          value: "8083"
+        - name: CACHE_SERVICE_URL
+          value: "http://cache-service:8082"
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-api-key
+              key: OPENAI_API_KEY
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8083
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8083
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "300m"
+          requests:
+            memory: "256Mi"
+            cpu: "150m"
+
+---
+# API Gateway Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: pageindex
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8083
+    protocol: TCP
+  selector:
+    app: api-gateway
